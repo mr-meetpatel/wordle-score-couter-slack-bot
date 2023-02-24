@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 from flask import Flask
 from slackeventsapi import SlackEventAdapter
 from datetime import datetime
-attemps = {}
 stats_count = {}
 # App Instances
 app = Flask(__name__)
@@ -32,17 +31,23 @@ def message(payload):
     user_id = response.get("user")
     text = response.get("text")
     if BOT_ID != user_id and re.fullmatch(WORDLE_REGEX, text):
-        client.chat_postMessage(channel=channel_id, text=text)
-        client.chat_postMessage(
-            channel=user_id,
-            text=f"Hello <@{user_id}> Thank you solving today's wordle :tada:",
-        )
         today = datetime.now().date().strftime("%Y-%m-%d")
-        if today in attemps:
-            attemps[today].append(user_id)
+
+        if user_id in stats_count:
+            if not str(stats_count[user_id][1]) == today:
+                stats_count[user_id][0]+=1
+                client.chat_postMessage(channel=channel_id, text=text)
+                client.chat_postMessage(
+                    channel=user_id,
+                    text=f"Hello <@{user_id}> Thank you solving today's wordle :tada:",
+                )
         else:
-            attemps[today]=[user_id]
-        stats_count[user_id] = stats_count[user_id]+1 if user_id in stats_count else 1
-        print(attemps,stats_count)
+            stats_count[user_id]=[1,today]  
+            client.chat_postMessage(channel=channel_id, text=text)
+            client.chat_postMessage(
+                channel=user_id,
+                text=f"Hello <@{user_id}> Thank you solving today's wordle :tada:",
+            )
+        print(stats_count)
 if __name__ == "__main__":
     app.run(debug=True)
