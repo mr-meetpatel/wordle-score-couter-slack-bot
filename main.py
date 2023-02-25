@@ -1,7 +1,7 @@
 import slack
 import os
 import re
-from constants import WORDLE_REGEX
+from constants import WORDLE_REGEX, GREETING_MESSAGE
 from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask
@@ -38,15 +38,13 @@ def message(payload):
     text = response.get("text")
     if BOT_ID != user_id and re.fullmatch(WORDLE_REGEX, text):
         today = datetime.now().date().strftime("%Y-%m-%d")
-
         if user_id in stats_count:
             if str(stats_count[user_id][1]) != today:
                 stats_count[user_id][0] += 1
-                send_message(user_id, text)
+                send_message(user_id, GREETING_MESSAGE.format(user_id))
         else:
             stats_count[user_id] = [1, today]
-            send_message(user_id, text)
-        print(stats_count)
+            send_message(user_id, GREETING_MESSAGE.format(user_id))
 
 
 if __name__ == "__main__":
