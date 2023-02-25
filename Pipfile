@@ -8,6 +8,7 @@ slackclient = "==2.9.4"
 python-dotenv = "*"
 flask = "==2.2.2"
 slackeventsapi = "==3.0.0"
+black = "*"
 
 [dev-packages]
 
