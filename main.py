@@ -46,6 +46,6 @@ def message(payload):
             stats_count[user_id] = [1, today]
             send_message(user_id, GREETING_MESSAGE.format(user_id))
 
-
-if __name__ == "__main__":
-    app.run(debug=True)
+@app.route("/")
+def index():
+    return "Hello Welcome Wordle Stats Counter"
