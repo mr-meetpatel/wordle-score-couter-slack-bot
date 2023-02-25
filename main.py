@@ -49,3 +49,6 @@ def message(payload):
 @app.route("/")
 def index():
     return "Hello Welcome Wordle Stats Counter"
+
+if __name__ == '__main__':
+    app.run()
