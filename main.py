@@ -35,14 +35,20 @@ def calculate_wordle_stats():
     Stats for Attempted WORDLE for the week of {} to {}
     There are {} royalties this week.. :crown:
     Check your stats below :tada:
-    Royalties List :tropy:
+    *Royalties List* :trophy:
     {}
-    Other List :clap:
+    *Remaining Players List* :clap:
     {}
     """
     no_of_royalties = sum(stats_count[user][0] == 1 for user in stats_count)
-    royalties = [f"<@{user}>" for user in stats_count if stats_count[user][0] == 1]
-    send_message("#test",stats)
+    royalties = ""
+    non_royalties = ""
+    for user in stats_count:
+        if stats_count[user][0]==1:
+            royalties+=f"<@{user}>\n"
+        else:
+            non_royalties+=f"<@{user}>\n"
+    send_message("#test",stats.format((date.today() - timedelta(4)).strftime("%d %b"),date.today().strftime("%d %b"),no_of_royalties,royalties,non_royalties))
 
 @slack_events_adapter.on("message")
 def message(payload):
@@ -72,6 +78,7 @@ def message(payload):
 def index():
     schedule.every().day.at("06:00").do(send_message, "#test", "Good Morning!")
     schedule.every().tuesday.at("07:00").do(send_message,"#test","Happy Tuesday ...")
+    schedule.every().day.at("21:36").do(calculate_wordle_stats)
     while True:
         schedule.run_pending()
         time.sleep(1)
