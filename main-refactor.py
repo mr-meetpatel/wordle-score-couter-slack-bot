@@ -4,7 +4,7 @@ from flask import Flask, Response, request
 from datetime import datetime, date, timedelta
 from flask_sqlalchemy import SQLAlchemy
 from slackeventsapi import SlackEventAdapter
-from constants import WORDLE_REGEX, SLACK_OAUTH_TOKEN, SIGING_SECRET
+from constants import WORDLE_REGEX, SLACK_OAUTH_TOKEN, SIGING_SECRET, NO_OF_DAYS,CHANNEL_NAME
 
 # App Instances
 app = Flask(__name__)
@@ -56,7 +56,7 @@ slack_events_adapter = SlackEventAdapter(
 
 
 class WordleMessage:
-    def __init__(self, channel, count=5):
+    def __init__(self, channel, count=NO_OF_DAYS):
         self.channel = channel
         self.from_date = (date.today() - timedelta(4)).strftime("%d %b")
         self.to_date = date.today().strftime("%d %b")
@@ -189,7 +189,7 @@ def index():
 
 @app.route("/msg")
 def msg():
-    wordle = WordleMessage("#channel-english-101")
+    wordle = WordleMessage(CHANNEL_NAME)
     return wordle.get_message_payload()
 
 
@@ -225,7 +225,7 @@ def send():
     error = ""
     data = request.form
     if data.get("text") == "password":
-        wordle = WordleMessage("#channel-english-101")
+        wordle = WordleMessage(CHANNEL_NAME)
         wordle.send()
     else:
         error = "Invalid Password"
