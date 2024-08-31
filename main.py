@@ -1,96 +1,211 @@
 import slack
-import os
 import re
-import schedule
+import sys
+from constants import WORDLE_REGEX,SLACK_OAUTH_TOKEN,SIGING_SECRET
+from flask import Flask,Response,request
 import time
-from constants import WORDLE_REGEX, GREETING_MESSAGE
-from pathlib import Path
-from dotenv import load_dotenv
-from flask import Flask
+import pytz
 from slackeventsapi import SlackEventAdapter
 from datetime import datetime,date,timedelta
-stats_count = {}
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.sql import func
+
+
+
 # App Instances
 app = Flask(__name__)
 
+# DB Setup
+app.config['SQLALCHEMY_DATABASE_URI'] = "mysql://MrProfessor:Mysql2410@MrProfessor.mysql.pythonanywhere-services.com/MrProfessor$wordle-stats"
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_POOL_SIZE'] = 10
+app.config['SQLALCHEMY_POOL_TIMEOUT'] = 500
+app.config['SQLALCHEMY_POOL_RECYCLE'] = 60 * 60 * 8
+
+db = SQLAlchemy(app)
+
+
+class StatsCount(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user = db.Column(db.Text,nullable=False)
+    name = db.Column(db.Text,nullable=False)
+    count = db.Column(db.Integer,nullable=False)
+    date = db.Column(db.Text,nullable=False)
+
+    def __repr__(self):
+        return f'<StatsCount {self.id}-{self.user}-{self.count}>'
+
+client = slack.WebClient(token=SLACK_OAUTH_TOKEN)
+
 # Event Adapter
 slack_events_adapter = SlackEventAdapter(
-    os.environ["SIGNING_SECRET"], "/slack/events", app
+    SIGING_SECRET, "/slack/events", app
 )
-
-# Read data from .env file
-
-env_path = Path(".") / ".env"
-load_dotenv(dotenv_path=env_path)
-
-client = slack.WebClient(token=os.environ["SLACK_OAUTH_TOKEN"])
 BOT_ID = client.api_call("auth.test")["user_id"]
 
-def send_message(channel_id, text):
-    client.chat_postMessage(channel=channel_id, text=text)
+class WordleMessage:
+    START_TEXT = {}
+    LEADERBOARD = {
+			"type": "section",
+			"text": {
+				"type": "mrkdwn",
+			}
+		}
+    DIVIDER = {'type': 'divider'}
+    OTHER = {
+			"type": "section",
+			"text": {
+				"type": "mrkdwn",
+			}
+		}
 
-def calculate_wordle_stats():
-    global stats_count
-    stats = """
-    <!channel>
-    Stats for Attempted WORDLE for the week of {} to {}
-    There {} this week.. :crown:
-    Check your stats below :tada:
-    
-    {}
-    """
-    no_of_royalties = sum(stats_count[user][0] == 5 for user in stats_count)
-    msg = f"is {no_of_royalties} royalty"
-    if no_of_royalties > 1:
-         msg = f"are {no_of_royalties} royalties"
+    def __init__(self, channel,count=5):
+        self.channel = channel
+        self.from_date = (date.today() - timedelta(4)).strftime("%d %b")
+        self.to_date = date.today().strftime("%d %b")
+        self.count = count
+        #self.no_of_royalties = len(StatsCount.query.filter_by(count=self.count).all())
+        self.no_of_royalties = len(StatsCount.query.filter(StatsCount.count >= count).all())
+        self.msg = ""
+        self.send_leaderboard=False
+        self.send_other=False
 
-    royalties = ""
-    non_royalties = ""
-    for user in stats_count:
-        if stats_count[user][0]==5:
-            if not royalties:
-                royalties += f"*Leaderboard* :trophy:\n"
 
-            royalties+=f"- <@{user}>\n"
+    def calculate_wordle_stats(self,send=True):
+        self.LEADERBOARD['text']['text']=f"*Leaderboard* :trophy:"
+        self.OTHER['text']['text']=f"*Remaining Players List :clap:*"
+        stats_count = StatsCount.query.all()
+        if self.no_of_royalties > 1:
+            self.msg = f"are {str(self.no_of_royalties)} royalties"
         else:
-            if not non_royalties:
-                non_royalties += "*\tRemaining Players List* :clap:\n"
-            non_royalties+=f"- {client.users_info(user=user)['user']['real_name']} ({stats_count[user][0]}/5)\n"
-    stats_count = {}
-    send_message("#test",stats.format((date.today() - timedelta(4)).strftime("%d %b"),date.today().strftime("%d %b"),msg,royalties+non_royalties))
+            self.msg = f"is {str(self.no_of_royalties)} royalty"
+        self.START_TEXT = {
+			"type": "section",
+			"text": {
+				"type": "mrkdwn",
+				"text": f"<!channel>\n\nStats for Attempted WORDLE for the week of {self.from_date} to {self.to_date}\nThere {self.msg} this week.. :crown:\nCheck your stats below :tada:"
+			}
+		}
+
+        # royalties = ""
+        # non_royalties = ""
+        for user in stats_count:
+            if user.count == 0:
+                continue
+            if user.count>=self.count:
+                # if not royalties:
+                #     royalties += "*Leaderboard* :trophy:\n"
+                self.send_leaderboard=True
+                self.LEADERBOARD['text']['text']+=f"\n- <@{user.user}>"
+            else:
+                # if not non_royalties:
+                #     non_royalties += "*\tRemaining Players List* :clap:\n"
+                self.send_other=True
+                self.OTHER['text']['text']+=f"\n- {client.users_info(user=user.user)['user']['real_name']} ({user.count}/{self.count})"
+        # user.count = 0
+        # db.session.commit()
+        if send:
+            self.send_message()
+        return str(self.get_message())
+
+    def send_message(self):
+        client.chat_postMessage(**self.get_message())
+
+    def get_message(self):
+        blocks = [self.START_TEXT]
+        if self.send_leaderboard:
+            blocks.append(self.LEADERBOARD)
+        if self.send_other:
+            blocks.append(self.OTHER)
+        return {
+            'channel': self.channel,
+            'blocks': blocks
+        }
+
+def send_message(wordle):
+    client.chat_postMessage(**wordle.get_message())
+
+
 @slack_events_adapter.on("message")
 def message(payload):
     response = payload.get("event", {})
     channel_id = response.get("channel")
     user_id = response.get("user")
     text = response.get("text")
-    if BOT_ID != user_id and re.fullmatch(WORDLE_REGEX, text):
+    f = open("log.txt", "a")
+    match = re.search(WORDLE_REGEX,text)
+    if not match:
+        f.write(f"\nuser_id {user_id} name : {client.users_info(user=user_id)['user']['real_name']}  FAILED:invalid wordle post  {text}")
+    if BOT_ID != user_id and match:
+        f.write(f"\nuser_id {user_id} name : {client.users_info(user=user_id)['user']['real_name']}")
         reaction = "tada"
         today = datetime.now().date().strftime("%Y-%m-%d")
-        if user_id in stats_count:
-            if str(stats_count[user_id][1]) != today and stats_count[user_id][0] <= 4:
-                stats_count[user_id][0] += 1
-                send_message(user_id, f"{GREETING_MESSAGE.format(user_id)}")
+        stats = StatsCount.query.filter_by(user=user_id).first()
+
+        if not stats is None:
+            if stats.date != today and stats.count <= 4:
+                stats.count += 1
+                stats.date = today
+                db.session.add(stats)
+                db.session.commit()
         else:
-            stats_count[user_id] = [1, today]
-            send_message(user_id, f"{GREETING_MESSAGE.format(user_id)}")
+            obj = StatsCount(user=user_id,count=1,date=today,name=client.users_info(user=user_id)['user']['real_name'])
+            db.session.add(obj)
+            db.session.commit()
 
         # Adding Reaction base on score
-        if text[11] == "X":
+        if match.group("score") == "X":
             reaction="thumbsup"
-        elif text[11] in ["1","2"]:
+        elif match.group("score") in ["1","2"]:
             reaction = "fire"
-        print(user_id)
         client.reactions_add(name=reaction,channel=channel_id,timestamp=response["ts"])
+    f.close()
+
 @app.route("/")
 def index():
-    schedule.every().day.at("06:00").do(send_message, "#test", "Good Morning!")
-    schedule.every().wednesday.at("07:00").do(send_message,"#test","Happy Wednesday ...")
-    schedule.every().day.at("15:29").do(send_message,"U04RLBVPJ48","Bot is Working...")
-    schedule.every().friday.at("18:30").do(calculate_wordle_stats)
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    return "Slack Bot is working"
+
+@app.route("/msg")
+def msg():
+    wordle=WordleMessage("#channel-english-101")
+    # wordle=WordleMessage("#test")
+    return wordle.calculate_wordle_stats(send=False)
+
+@app.route("/score")
+def scoreboard():
+    users = StatsCount.query.all()
+    str = """
+    <table border="1" align="center">
+    <tr>
+    <th>SrNo</th>
+    <th>Name</th>
+    <th>Count</th>
+    </tr>
+    """
+    for id,user in enumerate(users,start=1):
+        if user.count == 0:
+            continue
+        str+="<tr><td>{}</td><td>{}</td><td>{}</td></tr>".format(id,client.users_info(user=user.user)['user']['real_name'],user.count)
+    str+="</table>"
+    return str
+
+@app.route("/thankyou")
+def thankyou():
+    return "<h1>Thank you for installing my slack bot to your workspace</h1>"
+
+
+@app.route("/send-stats",methods=['POST','GET'])
+def send():
+    error = ""
+    data = request.form
+    wordle=WordleMessage("#channel-english-101")
+    # wordle=WordleMessage("#test")
+    if data.get("text") == "password":
+
+        wordle.calculate_wordle_stats()
+    else:
+        error = "Invalid Password"
+    return (Response(error), 200) if error else (Response(), 200)
 
 if __name__ == '__main__':
     app.run()
