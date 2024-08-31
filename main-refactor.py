@@ -118,9 +118,11 @@ class WordleMessage:
 
 
 class StatsRecorder:
-    def __init__(self, user_id, text):
+    def __init__(self, user_id, text, channel_id, timestamp):
         self.user_id = user_id
         self.text = text
+        self.channel_id = channel_id
+        self.timestamp = timestamp
 
     def process(self):
         if not re.search(WORDLE_REGEX, self.text):
@@ -164,18 +166,19 @@ class StatsRecorder:
         elif match.group("score") in ["1", "2"]:
             reaction = "fire"
 
-        response = re.search(WORDLE_REGEX, self.text)
-        client.add_reaction(reaction, response["channel"], response["ts"])
+        client.add_reaction(reaction, self.channel_id, self.timestamp)
 
 
 @slack_events_adapter.on("message")
 def handle_message(payload):
     event = payload.get("event", {})
+    channel_id = event.get("channel")
+    timestamp = event.get("ts")
     user_id = event.get("user")
     text = event.get("text")
 
     if user_id != client.bot_id:
-        recorder = StatsRecorder(user_id, text)
+        recorder = StatsRecorder(user_id, text, channel_id,timestamp)
         recorder.process()
 
 
