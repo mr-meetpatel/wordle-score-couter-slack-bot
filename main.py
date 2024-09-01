@@ -1,7 +1,7 @@
 import slack
 import re
 import sys
-from constants import WORDLE_REGEX,SLACK_OAUTH_TOKEN,SIGING_SECRET
+from constants import WORDLE_REGEX, SLACK_OAUTH_TOKEN, SIGING_SECRET, CHANNEL_NAME, NO_OF_DAYS
 from flask import Flask,Response,request
 import time
 import pytz
@@ -59,7 +59,7 @@ class WordleMessage:
 			}
 		}
 
-    def __init__(self, channel,count=5):
+    def __init__(self, channel,count=NO_OF_DAYS):
         self.channel = channel
         self.from_date = (date.today() - timedelta(4)).strftime("%d %b")
         self.to_date = date.today().strftime("%d %b")
@@ -145,6 +145,7 @@ def message(payload):
         if not stats is None:
             if stats.date != today and stats.count <= 4:
                 stats.count += 1
+                stats.count += 1
                 stats.date = today
                 db.session.add(stats)
                 db.session.commit()
@@ -198,8 +199,7 @@ def thankyou():
 def send():
     error = ""
     data = request.form
-    wordle=WordleMessage("#channel-english-101")
-    # wordle=WordleMessage("#test")
+    wordle=WordleMessage(CHANNEL_NAME)
     if data.get("text") == "password":
 
         wordle.calculate_wordle_stats()
