@@ -4,7 +4,7 @@ from flask import Flask, Response, request
 from datetime import datetime, date, timedelta
 from flask_sqlalchemy import SQLAlchemy
 from slackeventsapi import SlackEventAdapter
-from constants import WORDLE_REGEX, SLACK_OAUTH_TOKEN, SIGING_SECRET
+from constants import WORDLE_REGEX, SLACK_OAUTH_TOKEN, SIGING_SECRET, NO_OF_DAYS, CHANNEL_NAME
 
 # App Instances
 app = Flask(__name__)
@@ -57,12 +57,12 @@ slack_events_adapter = SlackEventAdapter(
 
 class MessageFactory:
     @staticmethod
-    def create_wordle_message(channel, count=5):
+    def create_wordle_message(channel, count=NO_OF_DAYS):
         return WordleMessage(channel, count)
 
 
 class WordleMessage:
-    def __init__(self, channel, count=5):
+    def __init__(self, channel, count=NO_OF_DAYS):
         self.channel = channel
         self.from_date = (date.today() - timedelta(4)).strftime("%d %b")
         self.to_date = date.today().strftime("%d %b")
@@ -146,23 +146,20 @@ class TadaReaction(ReactionStrategy):
 
 
 class StatsRecorder:
-    def __init__(self, user_id, text):
+    def __init__(self, user_id, text, channel_id, timestamp):
         self.user_id = user_id
         self.text = text
+        self.channel_id = channel_id
+        self.timestamp = timestamp
         self.reaction_strategy = None
 
     def process(self):
         if not re.search(WORDLE_REGEX, self.text):
-            self._log_invalid_wordle()
             return
 
         self._set_reaction_strategy()
         self._record_stats()
         self._add_reaction()
-
-    def _log_invalid_wordle(self):
-        with open("log.txt", "a") as f:
-            f.write(f"\nuser_id {self.user_id} name : {client.get_user_info(self.user_id)}  FAILED:invalid wordle post {self.text}")
 
     def _set_reaction_strategy(self):
         match = re.search(WORDLE_REGEX, self.text)
@@ -196,12 +193,7 @@ class StatsRecorder:
             db.session.commit()
 
     def _add_reaction(self):
-        match = re.search(WORDLE_REGEX, self.text)
-        score = match.group("score")
-        channel_id = match.group("channel")
-        timestamp = match.group("ts")
-
-        self.reaction_strategy.add_reaction(client, channel_id, timestamp, score)
+        self.reaction_strategy.add_reaction(client, self.channel_id, self.timestamp)
 
 
 class SlackEventObserver:
@@ -213,9 +205,11 @@ class MessageEventObserver(SlackEventObserver):
     def update(self, event):
         user_id = event.get("user")
         text = event.get("text")
+        channel_id = event.get("channel")
+        timestamp = event.get("ts")
 
         if user_id != client.bot_id:
-            recorder = StatsRecorder(user_id, text)
+            recorder = StatsRecorder(user_id, text, channel_id, timestamp)
             recorder.process()
 
 
@@ -236,13 +230,15 @@ class SlackEventManager:
 
 
 event_manager = SlackEventManager()
-event_manager.attach(MessageEventObserver())
+message_event_observer = MessageEventObserver()
+event_manager.attach(message_event_observer)
 
 
 @slack_events_adapter.on("message")
 def handle_message(payload):
     event = payload.get("event", {})
     event_manager.notify(event)
+    #event_manager.detach(message_event_observer)
 
 
 @app.route("/")
@@ -252,7 +248,7 @@ def index():
 
 @app.route("/msg")
 def msg():
-    wordle = MessageFactory.create_wordle_message("#channel-english-101")
+    wordle = MessageFactory.create_wordle_message(CHANNEL_NAME)
     return wordle.get_message_payload()
 
 
@@ -281,3 +277,13 @@ def generate_scoreboard(users):
 @app.route("/thankyou")
 def thankyou():
     return "<h1>Thank you for installing my slack bot to your workspace</h1>"
+
+@app.route("/send-stats", methods=['POST', 'GET'])
+def send_stats():
+    data = request.form
+    if data.get("text") == "password":
+        # event_manager._observers
+        return Response(str(len(event_manager._observers)),200)
+    else:
+        error = "Invalid Password"
+    return (Response(error), 200) if error else (Response(), 200)
