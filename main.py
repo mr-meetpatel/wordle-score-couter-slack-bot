@@ -1,16 +1,10 @@
 import slack
 import re
-import sys
-from constants import WORDLE_REGEX, SLACK_OAUTH_TOKEN, SIGING_SECRET, CHANNEL_NAME, NO_OF_DAYS
-from flask import Flask,Response,request
-import time
-import pytz
-from slackeventsapi import SlackEventAdapter
-from datetime import datetime,date,timedelta
+from flask import Flask, Response, request
+from datetime import datetime, date, timedelta
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.sql import func
-
-
+from slackeventsapi import SlackEventAdapter
+from constants import WORDLE_REGEX, SLACK_OAUTH_TOKEN, SIGING_SECRET, NO_OF_DAYS, CHANNEL_NAME
 
 # App Instances
 app = Flask(__name__)
@@ -26,156 +20,246 @@ db = SQLAlchemy(app)
 
 
 class StatsCount(db.Model):
+    __tablename__ = 'stats_count'
+
     id = db.Column(db.Integer, primary_key=True)
-    user = db.Column(db.Text,nullable=False)
-    name = db.Column(db.Text,nullable=False)
-    count = db.Column(db.Integer,nullable=False)
-    date = db.Column(db.Text,nullable=False)
+    user = db.Column(db.Text, nullable=False)
+    name = db.Column(db.Text, nullable=False)
+    count = db.Column(db.Integer, nullable=False)
+    date = db.Column(db.Text, nullable=False)
 
     def __repr__(self):
         return f'<StatsCount {self.id}-{self.user}-{self.count}>'
 
-client = slack.WebClient(token=SLACK_OAUTH_TOKEN)
+
+class SlackClientWrapper:
+    def __init__(self, token):
+        self.client = slack.WebClient(token=token)
+        self.bot_id = self.client.api_call("auth.test")["user_id"]
+
+    def post_message(self, channel, blocks):
+        self.client.chat_postMessage(channel=channel, blocks=blocks)
+
+    def add_reaction(self, reaction, channel, timestamp):
+        self.client.reactions_add(name=reaction, channel=channel, timestamp=timestamp)
+
+    def get_user_info(self, user_id):
+        return self.client.users_info(user=user_id)['user']['real_name']
+
+
+client = SlackClientWrapper(token=SLACK_OAUTH_TOKEN)
 
 # Event Adapter
 slack_events_adapter = SlackEventAdapter(
     SIGING_SECRET, "/slack/events", app
 )
-BOT_ID = client.api_call("auth.test")["user_id"]
+
+
+class MessageFactory:
+    @staticmethod
+    def create_wordle_message(channel, count=NO_OF_DAYS):
+        return WordleMessage(channel, count)
+
 
 class WordleMessage:
-    START_TEXT = {}
-    LEADERBOARD = {
-			"type": "section",
-			"text": {
-				"type": "mrkdwn",
-			}
-		}
-    DIVIDER = {'type': 'divider'}
-    OTHER = {
-			"type": "section",
-			"text": {
-				"type": "mrkdwn",
-			}
-		}
-
-    def __init__(self, channel,count=NO_OF_DAYS):
+    def __init__(self, channel, count=NO_OF_DAYS):
         self.channel = channel
         self.from_date = (date.today() - timedelta(4)).strftime("%d %b")
         self.to_date = date.today().strftime("%d %b")
         self.count = count
-        #self.no_of_royalties = len(StatsCount.query.filter_by(count=self.count).all())
         self.no_of_royalties = len(StatsCount.query.filter(StatsCount.count >= count).all())
-        self.msg = ""
-        self.send_leaderboard=False
-        self.send_other=False
+        self.blocks = []
+        self._prepare_blocks()
 
+    def _prepare_blocks(self):
+        start_text = {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"<!channel>\n\nStats for Attempted WORDLE for the week of {self.from_date} to {self.to_date}\n"
+                        f"There {'are' if self.no_of_royalties > 1 else 'is'} {self.no_of_royalties} royalty{'ies' if self.no_of_royalties > 1 else ''} "
+                        f"this week.. :crown:\nCheck your stats below :tada:"
+            }
+        }
+        self.blocks.append(start_text)
 
-    def calculate_wordle_stats(self,send=True):
-        self.LEADERBOARD['text']['text']=f"*Leaderboard* :trophy:"
-        self.OTHER['text']['text']=f"*Remaining Players List :clap:*"
-        stats_count = StatsCount.query.all()
-        if self.no_of_royalties > 1:
-            self.msg = f"are {str(self.no_of_royalties)} royalties"
-        else:
-            self.msg = f"is {str(self.no_of_royalties)} royalty"
-        self.START_TEXT = {
-			"type": "section",
-			"text": {
-				"type": "mrkdwn",
-				"text": f"<!channel>\n\nStats for Attempted WORDLE for the week of {self.from_date} to {self.to_date}\nThere {self.msg} this week.. :crown:\nCheck your stats below :tada:"
-			}
-		}
+        leaderboard, other = self._generate_leaderboard_and_other()
+        if leaderboard:
+            self.blocks.append(self._generate_section_block("Leaderboard", ":trophy:", leaderboard))
+        if other:
+            self.blocks.append(self._generate_section_block("Remaining Players List", ":clap:", other))
 
-        # royalties = ""
-        # non_royalties = ""
-        for user in stats_count:
+    def _generate_leaderboard_and_other(self):
+        leaderboard = []
+        other = []
+
+        for user in StatsCount.query.all():
             if user.count == 0:
                 continue
-            if user.count>=self.count:
-                # if not royalties:
-                #     royalties += "*Leaderboard* :trophy:\n"
-                self.send_leaderboard=True
-                self.LEADERBOARD['text']['text']+=f"\n- <@{user.user}>"
+            if user.count >= self.count:
+                leaderboard.append(f"<@{user.user}>")
             else:
-                # if not non_royalties:
-                #     non_royalties += "*\tRemaining Players List* :clap:\n"
-                self.send_other=True
-                self.OTHER['text']['text']+=f"\n- {client.users_info(user=user.user)['user']['real_name']} ({user.count}/{self.count})"
-        # user.count = 0
-        # db.session.commit()
-        if send:
-            self.send_message()
-        return str(self.get_message())
+                other.append(f"{client.get_user_info(user.user)} ({user.count}/{self.count})")
 
-    def send_message(self):
-        client.chat_postMessage(**self.get_message())
+        return leaderboard, other
 
-    def get_message(self):
-        blocks = [self.START_TEXT]
-        if self.send_leaderboard:
-            blocks.append(self.LEADERBOARD)
-        if self.send_other:
-            blocks.append(self.OTHER)
+    @staticmethod
+    def _generate_section_block(title, emoji, users):
         return {
-            'channel': self.channel,
-            'blocks': blocks
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*{title}* {emoji}\n" + "\n".join(f"- {user}" for user in users)
+            }
         }
 
-def send_message(wordle):
-    client.chat_postMessage(**wordle.get_message())
+    def get_message_payload(self):
+        return {
+            'channel': self.channel,
+            'blocks': self.blocks
+        }
+
+    def send(self):
+        client.post_message(self.channel, self.blocks)
 
 
-@slack_events_adapter.on("message")
-def message(payload):
-    response = payload.get("event", {})
-    channel_id = response.get("channel")
-    user_id = response.get("user")
-    text = response.get("text")
-    f = open("log.txt", "a")
-    match = re.search(WORDLE_REGEX,text)
-    if not match:
-        f.write(f"\nuser_id {user_id} name : {client.users_info(user=user_id)['user']['real_name']}  FAILED:invalid wordle post  {text}")
-    if BOT_ID != user_id and match:
-        f.write(f"\nuser_id {user_id} name : {client.users_info(user=user_id)['user']['real_name']}")
+class ReactionStrategy:
+    def add_reaction(self, client, channel_id, timestamp):
+        raise NotImplementedError("This method should be overridden by subclasses")
+
+
+class FireReaction(ReactionStrategy):
+    def add_reaction(self, client, channel_id, timestamp):
+        reaction = "fire"
+        client.add_reaction(reaction, channel_id, timestamp)
+
+
+class ThumbsUpReaction(ReactionStrategy):
+    def add_reaction(self, client, channel_id, timestamp):
+        reaction = "thumbsup"
+        client.add_reaction(reaction, channel_id, timestamp)
+
+class TadaReaction(ReactionStrategy):
+    def add_reaction(self, client, channel_id, timestamp):
         reaction = "tada"
-        today = datetime.now().date().strftime("%Y-%m-%d")
-        stats = StatsCount.query.filter_by(user=user_id).first()
+        client.add_reaction(reaction, channel_id, timestamp)
 
-        if not stats is None:
+
+class StatsRecorder:
+    def __init__(self, user_id, text, channel_id, timestamp):
+        self.user_id = user_id
+        self.text = text
+        self.channel_id = channel_id
+        self.timestamp = timestamp
+        self.reaction_strategy = None
+
+    def process(self):
+        if not re.search(WORDLE_REGEX, self.text):
+            return
+
+        self._set_reaction_strategy()
+        self._record_stats()
+        self._add_reaction()
+
+    def _set_reaction_strategy(self):
+        match = re.search(WORDLE_REGEX, self.text)
+        score = match.group("score")
+
+        if score in ["1", "2"]:
+            self.reaction_strategy = FireReaction()
+        elif score == "X":
+            self.reaction_strategy = ThumbsUpReaction()
+        else:
+            self.reaction_strategy = TadaReaction()
+
+    def _record_stats(self):
+        stats = StatsCount.query.filter_by(user=self.user_id).first()
+        today = datetime.now().date().strftime("%Y-%m-%d")
+
+        if stats:
             if stats.date != today and stats.count <= 4:
-                stats.count += 1
                 stats.count += 1
                 stats.date = today
                 db.session.add(stats)
                 db.session.commit()
         else:
-            obj = StatsCount(user=user_id,count=1,date=today,name=client.users_info(user=user_id)['user']['real_name'])
-            db.session.add(obj)
+            new_stat = StatsCount(
+                user=self.user_id,
+                count=1,
+                date=today,
+                name=client.get_user_info(self.user_id)
+            )
+            db.session.add(new_stat)
             db.session.commit()
 
-        # Adding Reaction base on score
-        if match.group("score") == "X":
-            reaction="thumbsup"
-        elif match.group("score") in ["1","2"]:
-            reaction = "fire"
-        client.reactions_add(name=reaction,channel=channel_id,timestamp=response["ts"])
-    f.close()
+    def _add_reaction(self):
+        self.reaction_strategy.add_reaction(client, self.channel_id, self.timestamp)
+
+
+class SlackEventObserver:
+    def update(self, event):
+        raise NotImplementedError("This method should be overridden by subclasses")
+
+
+class MessageEventObserver(SlackEventObserver):
+    def update(self, event):
+        user_id = event.get("user")
+        text = event.get("text")
+        channel_id = event.get("channel")
+        timestamp = event.get("ts")
+
+        if user_id != client.bot_id:
+            recorder = StatsRecorder(user_id, text, channel_id, timestamp)
+            recorder.process()
+
+
+class SlackEventManager:
+    def __init__(self):
+        self._observers = []
+
+    def attach(self, observer):
+        if observer not in self._observers:
+            self._observers.append(observer)
+
+    def detach(self, observer):
+        self._observers.remove(observer)
+
+    def notify(self, event):
+        for observer in self._observers:
+            observer.update(event)
+
+
+event_manager = SlackEventManager()
+message_event_observer = MessageEventObserver()
+event_manager.attach(message_event_observer)
+
+
+@slack_events_adapter.on("message")
+def handle_message(payload):
+    event = payload.get("event", {})
+    event_manager.notify(event)
+    #event_manager.detach(message_event_observer)
+
 
 @app.route("/")
 def index():
     return "Slack Bot is working"
 
+
 @app.route("/msg")
 def msg():
-    wordle=WordleMessage("#channel-english-101")
-    # wordle=WordleMessage("#test")
-    return wordle.calculate_wordle_stats(send=False)
+    wordle = MessageFactory.create_wordle_message(CHANNEL_NAME)
+    return wordle.get_message_payload()
+
 
 @app.route("/score")
 def scoreboard():
     users = StatsCount.query.all()
-    str = """
+    return generate_scoreboard(users)
+
+
+def generate_scoreboard(users):
+    scoreboard_html = """
     <table border="1" align="center">
     <tr>
     <th>SrNo</th>
@@ -183,29 +267,23 @@ def scoreboard():
     <th>Count</th>
     </tr>
     """
-    for id,user in enumerate(users,start=1):
-        if user.count == 0:
-            continue
-        str+="<tr><td>{}</td><td>{}</td><td>{}</td></tr>".format(id,client.users_info(user=user.user)['user']['real_name'],user.count)
-    str+="</table>"
-    return str
+    for id, user in enumerate(users, start=1):
+        if user.count > 0:
+            scoreboard_html += f"<tr><td>{id}</td><td>{client.get_user_info(user.user)}</td><td>{user.count}</td></tr>"
+    scoreboard_html += "</table>"
+    return scoreboard_html
+
 
 @app.route("/thankyou")
 def thankyou():
     return "<h1>Thank you for installing my slack bot to your workspace</h1>"
 
-
-@app.route("/send-stats",methods=['POST','GET'])
-def send():
-    error = ""
+@app.route("/send-stats", methods=['POST', 'GET'])
+def send_stats():
     data = request.form
-    wordle=WordleMessage(CHANNEL_NAME)
     if data.get("text") == "password":
-
-        wordle.calculate_wordle_stats()
+        # event_manager._observers
+        return Response(str(len(event_manager._observers)),200)
     else:
         error = "Invalid Password"
     return (Response(error), 200) if error else (Response(), 200)
-
-if __name__ == '__main__':
-    app.run()
