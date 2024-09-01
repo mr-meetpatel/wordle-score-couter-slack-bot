@@ -283,6 +283,6 @@ def send_stats():
     if data.get("text") == "password":
         wordle = MessageFactory.create_wordle_message(CHANNEL_NAME)
         wordle.send()
+        return Response(status=200)
     else:
-        error = "Invalid Password"
-    return (Response(error), 200) if error else (Response(), 200)
+        return Response("Invalid Password",400)
