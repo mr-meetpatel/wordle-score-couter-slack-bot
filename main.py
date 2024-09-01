@@ -1,5 +1,3 @@
-from xxlimited_35 import error
-
 import slack
 import re
 from flask import Flask, Response, request
@@ -282,7 +280,6 @@ def thankyou():
 @app.route("/send-stats", methods=['POST', 'GET'])
 def send_stats():
     data = request.form
-    error = ""
     if data.get("text") == "password":
         wordle = MessageFactory.create_wordle_message(CHANNEL_NAME)
         wordle.send()
