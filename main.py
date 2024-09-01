@@ -238,7 +238,6 @@ event_manager.attach(message_event_observer)
 def handle_message(payload):
     event = payload.get("event", {})
     event_manager.notify(event)
-    #event_manager.detach(message_event_observer)
 
 
 @app.route("/")
@@ -282,8 +281,8 @@ def thankyou():
 def send_stats():
     data = request.form
     if data.get("text") == "password":
-        # event_manager._observers
-        return Response(str(len(event_manager._observers)),200)
+        wordle = MessageFactory.create_wordle_message(CHANNEL_NAME)
+        wordle.send()
     else:
         error = "Invalid Password"
     return (Response(error), 200) if error else (Response(), 200)
