@@ -221,23 +221,24 @@ class SlackEventManager:
         if observer not in self._observers:
             self._observers.append(observer)
 
-    def _detach(self, observer):
+    def detach(self, observer):
         self._observers.remove(observer)
 
     def notify(self, event):
         for observer in self._observers:
             observer.update(event)
-            self._detach(observer)
 
 
 event_manager = SlackEventManager()
+message_event_observer = MessageEventObserver()
+event_manager.attach(message_event_observer)
+
 
 @slack_events_adapter.on("message")
 def handle_message(payload):
     event = payload.get("event", {})
-    message_event_observer = MessageEventObserver()
-    event_manager.attach(message_event_observer)
     event_manager.notify(event)
+    #event_manager.detach(message_event_observer)
 
 
 @app.route("/")
